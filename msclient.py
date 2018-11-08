@@ -29,21 +29,41 @@ logging.config.dictConfig({
         }
     },
     'handlers': {
-        'mess_handler': {
+        'msclient': {
             'class': 'logging.FileHandler',
             'level': 'INFO',
             'filename': './logs/msclient.log',
             'formatter': 'default',
             'mode': 'a'
         },
+        'msserver': {
+            'class': 'logging.FileHandler',
+            'level': 'INFO',
+            'filename': './logs/msserver.log',
+            'formatter': 'default',
+            'mode': 'a'
+        },
+        'mssocks': {
+            'class': 'logging.FileHandler',
+            'level': 'INFO',
+            'filename': './logs/mssocks.log',
+            'formatter': 'default',
+            'mode': 'a'
+        }
     },
     'loggers': {
-        'messsocks': {
-            'handlers': ['mess_handler']
+        'msclient': {
+            'handlers': ['msclient']
+        },
+        'msserver': {
+            'handlers': ['msserver']
+        },
+        'mssocks': {
+            'handlers': ['mssocks']
         }
     }
 })
-log = logging.getLogger('msclient')
+log = logging.getLogger('mssocks')
 log.setLevel(logging.DEBUG)
 
 
@@ -117,83 +137,97 @@ def start_proxy(auth_method=NO_AUTH):
         +----+-----+-------+------+----------+----------+
 
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(ADDR)
         s.listen()
-        while True:
-            conn, dst_addr = s.accept()
-            log.info('connected by %s', dst_addr)
-            state = State.CONNECT
-            with conn:
-                if state == State.CONNECT:
-                    ver, nmethods = struct.unpack('>BB', conn.recv(2))
-                    methods = [ord(conn.recv(1)) for _ in range(nmethods)]
-                    if ver == SOCKS_VERSION:
-                        if auth_method in methods:
-                            conn.sendall(struct.pack('>BB', ver, auth_method))
-                        if auth_method == NO_AUTH:
-                            state = State.REQUEST
-                        elif auth_method == USERNAME_PASSWORD:
-                            state = State.VERIFY
+        conn, dst_addr = s.accept()
+        log.info('connected by %s', dst_addr)
+        state = State.CONNECT
+        if state == State.CONNECT:
+            ver, nmethods = struct.unpack('>BB', conn.recv(2))
+            log.info('start connect: %r', state)
+            methods = [ord(conn.recv(1)) for _ in range(nmethods)]
+            if ver == SOCKS_VERSION:
+                if auth_method in methods:
+                    conn.sendall(struct.pack('>BB', ver, auth_method))
+                if auth_method == NO_AUTH:
+                    state = State.REQUEST
+                elif auth_method == USERNAME_PASSWORD:
+                    state = State.VERIFY
 
-                if state == State.VERIFY:
-                    if verify_credentials(conn, USERNAME, PASSWORD):
-                        state = State.REQUEST
-                    else:
-                        state = State.CONNECT
+        if state == State.VERIFY:
+            if verify_credentials(conn, USERNAME, PASSWORD):
+                state = State.REQUEST
+            else:
+                state = State.CONNECT
+            log.info('state: %r', state)
 
-                if state == State.REQUEST:
-                    ver, cmd, _, atyp = struct.unpack('>BBBB', conn.recv(4))
-                    assert ver == SOCKS_VERSION
+        if state == State.REQUEST:
+            ver, cmd, _, atyp = struct.unpack('>BBBB', conn.recv(4))
+            assert ver == SOCKS_VERSION
+            log.info('start request: %r', state)
+            if atyp == 1: # ipv4
+                dst_addr = socket.inet_ntoa(conn.recv(4))
+            elif atyp == 3: # domain
+                domain_len = ord(conn.recv(1))
+                dst_addr = conn.recv(domain_len)
+            dst_port = struct.unpack('>H', conn.recv(2))[0]
 
-                    if atyp == 1: # ipv4
-                        dst_addr = socket.inet_ntoa(conn.recv(4))
-                    elif atyp == 3: # domain
-                        domain_len = ord(conn.recv(1))
-                        dst_addr = conn.recv(domain_len)
-                    dst_port = struct.unpack('>H', conn.recv(2))[0]
+            try:
+                if cmd == 1: # connect
+                    remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    log.debug('remote: %s:%s', dst_addr, dst_port)
 
-                    try:
-                        if cmd == 1: # connect
-                            remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            log.info('remote: %s:%s', dst_addr, dst_port)
+                    remote.connect((dst_addr, dst_port))
+                    bind_address = remote.getsockname()
+                    log.debug('bind: %s', bind_address)
 
-                            remote.connect((dst_addr, dst_port))
-                            bind_address = remote.getsockname()
-                            log.info('bind: %s', bind_address)
+                    bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
+                    bind_port = bind_address[1]
+                    # Success, rep = 0
+                    reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 3, bind_port)
+            except Exception as err:
+                # Success, rep = 1
+                reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
+                log.error(err)
 
-                            bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
-                            bind_port = bind_address[1]
-                            # Success, rep = 0
-                            reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 3, bind_port)
-                    except Exception as err:
-                        # Success, rep = 1
-                        reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
-                        log.error(err)
+            log.debug('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
+            conn.sendall(reply)
 
-                    log.info('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
-                    conn.sendall(reply)
-
-                    # start exchange data
-                    if reply[1] == 0 and cmd == 1:
-                        exchange_loop(conn, remote)
-                        conn.close()
-                        state = State.CONNECT
+            # start exchange data
+            if reply[1] == 0 and cmd == 1:
+                log.info('start exchange data: %r', state)
+                exchange_loop(conn, remote)
+                log.info('end exchange data: %r', state)
+            conn.close()
+            remote.close()
+            state = None
+        s.close()
 
 
 def exchange_loop(client, remote):
+    count = 0
     while True:
-        r, w, e = select.select([client, remote], [], [])
+        r, w, e = select.select([client, remote], [], [], 3)
 
-        if client in r:
-            data = client.recv(4096)
-            if remote.send(data) <= 0:
-                break
+        if r:
+            if client in r:
+                data = client.recv(4096)
+                if remote.send(data) <= 0:
+                    break
 
-        if remote in r:
-            data = remote.recv(4096)
-            if client.send(data) <= 0:
-                break
+            if remote in r:
+                data = remote.recv(4096)
+                if client.send(data) <= 0:
+                    break
+        else:
+            break
+
+        log.info('looping: %d', count)
+        log.info('read: %r', r)
+        count += 1
 
 
 def verify_credentials(conn, username, passwd):
