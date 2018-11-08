@@ -5,6 +5,7 @@ import logging.config
 
 from enum import Enum
 
+
 HOST = '127.0.0.1'
 PORT = 1081
 ADDR = (HOST, PORT)
@@ -21,50 +22,8 @@ PASSWORD = 'password'
 SERVER_IP = '127.0.0.1'
 SERVER_PORT = 34561
 
-logging.config.dictConfig({
-    'version': 1,
-    'formatters': {
-        'default': {
-            'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
-        }
-    },
-    'handlers': {
-        'msclient': {
-            'class': 'logging.FileHandler',
-            'level': 'INFO',
-            'filename': './logs/msclient.log',
-            'formatter': 'default',
-            'mode': 'a'
-        },
-        'msserver': {
-            'class': 'logging.FileHandler',
-            'level': 'INFO',
-            'filename': './logs/msserver.log',
-            'formatter': 'default',
-            'mode': 'a'
-        },
-        'mssocks': {
-            'class': 'logging.FileHandler',
-            'level': 'INFO',
-            'filename': './logs/mssocks.log',
-            'formatter': 'default',
-            'mode': 'a'
-        }
-    },
-    'loggers': {
-        'msclient': {
-            'handlers': ['msclient']
-        },
-        'msserver': {
-            'handlers': ['msserver']
-        },
-        'mssocks': {
-            'handlers': ['mssocks']
-        }
-    }
-})
-log = logging.getLogger('mssocks')
-log.setLevel(logging.DEBUG)
+logging.config.fileConfig('logging.conf')
+log = logging.getLogger('messsocks')
 
 
 class State(Enum):
