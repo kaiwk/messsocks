@@ -12,8 +12,14 @@ ADDR = (HOST, PORT)
 SOCKS_VERSION = 5
 AUTHENTICATION_VERSION = 1
 
+NO_AUTH = 0x00
+USERNAME_PASSWORD = 0x02
+
 USERNAME = 'username'
 PASSWORD = 'password'
+
+SERVER_IP = '127.0.0.1'
+SERVER_PORT = 34561
 
 logging.config.dictConfig({
     'version': 1,
@@ -26,7 +32,7 @@ logging.config.dictConfig({
         'mess_handler': {
             'class': 'logging.FileHandler',
             'level': 'INFO',
-            'filename': './logs/mess.log',
+            'filename': './logs/msclient.log',
             'formatter': 'default',
             'mode': 'a'
         },
@@ -37,16 +43,15 @@ logging.config.dictConfig({
         }
     }
 })
-log = logging.getLogger('messsocks')
+log = logging.getLogger('msclient')
 log.setLevel(logging.DEBUG)
+
 
 class State(Enum):
     CONNECT = 0
     REQUEST = 1
     VERIFY = 2
 
-NO_AUTH = 0x00
-USERNAME_PASSWORD = 0x02
 
 def start_proxy(auth_method=NO_AUTH):
     """
@@ -117,7 +122,7 @@ def start_proxy(auth_method=NO_AUTH):
         s.listen()
         while True:
             conn, dst_addr = s.accept()
-            log.info('connected by {}'.format(dst_addr))
+            log.info('connected by %s', dst_addr)
             state = State.CONNECT
             with conn:
                 if state == State.CONNECT:
@@ -151,11 +156,11 @@ def start_proxy(auth_method=NO_AUTH):
                     try:
                         if cmd == 1: # connect
                             remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            log.info('remote: {}:{}'.format(dst_addr, dst_port))
+                            log.info('remote: %s:%s', dst_addr, dst_port)
 
                             remote.connect((dst_addr, dst_port))
                             bind_address = remote.getsockname()
-                            log.info('bind: {}'.format(bind_address))
+                            log.info('bind: %s', bind_address)
 
                             bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
                             bind_port = bind_address[1]
@@ -166,7 +171,7 @@ def start_proxy(auth_method=NO_AUTH):
                         reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
                         log.error(err)
 
-                    log.info('socks version: {}, bind address: {}:{}'.format(SOCKS_VERSION, bind_addr, bind_port))
+                    log.info('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
                     conn.sendall(reply)
 
                     # start exchange data
@@ -213,7 +218,7 @@ def verify_credentials(conn, username, passwd):
     """
 
     version = ord(conn.recv(1))
-    log.info('authentication version: {}'.format(version))
+    log.info('authentication version: %s', version)
     assert version == AUTHENTICATION_VERSION
 
     ulen = ord(conn.recv(1))
