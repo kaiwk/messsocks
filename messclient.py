@@ -1,7 +1,7 @@
 import socket
-import select
 import struct
 import logging.config
+import asyncio
 
 from enum import Enum
 
@@ -32,7 +32,52 @@ class State(Enum):
     VERIFY = 2
 
 
-def start_proxy(auth_method=NO_AUTH):
+async def verify_credentials(reader, writer, username, passwd):
+    """
+    reference: rfc1929
+    Client:
+
+           +----+------+----------+------+----------+
+           |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+           +----+------+----------+------+----------+
+           | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+           +----+------+----------+------+----------+
+
+    Server:
+
+                        +----+--------+
+                        |VER | STATUS |
+                        +----+--------+
+                        | 1  |   1    |
+                        +----+--------+
+
+    """
+
+    version = ord(await reader.read(1))
+    log.info('authentication version: %s', version)
+    assert version == AUTHENTICATION_VERSION
+
+    ulen = ord(await reader.read(1))
+    _username = await reader.read(ulen).decode('utf-8')
+
+    plen = ord(await reader.read(1))
+    _password = await reader.read(plen).decode('utf-8')
+
+    if _username == username and _password == passwd:
+        # Success, status = 0
+        response = struct.pack(">BB", version, 0)
+        writer.write(response)
+        await writer.drain()
+        return True
+
+    # Failure, status != 0
+    response = struct.pack(">BB", version, 1)
+    writer.write(response)
+    await writer.drain()
+    return False
+
+
+async def start_proxy(reader, writer):
     """
     reference: rfc1928
 
@@ -96,141 +141,92 @@ def start_proxy(auth_method=NO_AUTH):
         +----+-----+-------+------+----------+----------+
 
     """
-    while True:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(ADDR)
-        s.listen()
-        conn, dst_addr = s.accept()
-        log.info('connected by %s', dst_addr)
-        state = State.CONNECT
-        if state == State.CONNECT:
-            ver, nmethods = struct.unpack('>BB', conn.recv(2))
-            log.info('start connect: %r', state)
-            methods = [ord(conn.recv(1)) for _ in range(nmethods)]
-            if ver == SOCKS_VERSION:
-                if auth_method in methods:
-                    conn.sendall(struct.pack('>BB', ver, auth_method))
-                if auth_method == NO_AUTH:
-                    state = State.REQUEST
-                elif auth_method == USERNAME_PASSWORD:
-                    state = State.VERIFY
-
-        if state == State.VERIFY:
-            if verify_credentials(conn, USERNAME, PASSWORD):
+    auth_method = NO_AUTH
+    state = State.CONNECT
+    if state == State.CONNECT:
+        ver, nmethods = struct.unpack('>BB', await reader.read(2))
+        log.info('start connect: %r', state)
+        methods = [ord(await reader.read(1)) for _ in range(nmethods)]
+        if ver == SOCKS_VERSION:
+            if auth_method in methods:
+                writer.write(struct.pack('>BB', ver, auth_method))
+                await writer.drain()
+            if auth_method == NO_AUTH:
                 state = State.REQUEST
-            else:
-                state = State.CONNECT
-            log.info('state: %r', state)
+            elif auth_method == USERNAME_PASSWORD:
+                state = State.VERIFY
 
-        if state == State.REQUEST:
-            ver, cmd, _, atyp = struct.unpack('>BBBB', conn.recv(4))
-            assert ver == SOCKS_VERSION
-            log.info('start request: %r', state)
-            if atyp == 1: # ipv4
-                dst_addr = socket.inet_ntoa(conn.recv(4))
-            elif atyp == 3: # domain
-                domain_len = ord(conn.recv(1))
-                dst_addr = conn.recv(domain_len)
-            dst_port = struct.unpack('>H', conn.recv(2))[0]
-
-            try:
-                if cmd == 1: # connect
-                    remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    log.debug('remote: %s:%s', dst_addr, dst_port)
-
-                    remote.connect((dst_addr, dst_port))
-                    bind_address = remote.getsockname()
-                    log.debug('bind: %s', bind_address)
-
-                    bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
-                    bind_port = bind_address[1]
-                    # Success, rep = 0
-                    reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 3, bind_port)
-            except Exception as err:
-                # Success, rep = 1
-                reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
-                log.error(err)
-
-            log.debug('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
-            conn.sendall(reply)
-
-            # start exchange data
-            if reply[1] == 0 and cmd == 1:
-                log.info('start exchange data: %r', state)
-                exchange_loop(conn, remote)
-                log.info('end exchange data: %r', state)
-            conn.close()
-            remote.close()
-            state = None
-        s.close()
-
-
-def exchange_loop(client, remote):
-    count = 0
-    while True:
-        r, w, e = select.select([client, remote], [], [], 3)
-
-        if r:
-            if client in r:
-                data = client.recv(4096)
-                if remote.send(data) <= 0:
-                    break
-
-            if remote in r:
-                data = remote.recv(4096)
-                if client.send(data) <= 0:
-                    break
+    if state == State.VERIFY:
+        if await verify_credentials(reader, writer, USERNAME, PASSWORD):
+            state = State.REQUEST
         else:
-            break
+            state = State.CONNECT
+        log.info('state: %r', state)
 
-        log.info('looping: %d', count)
-        log.info('read: %r', r)
-        count += 1
+    if state == State.REQUEST:
+        ver, cmd, _, atyp = struct.unpack('>BBBB', await reader.read(4))
+        assert ver == SOCKS_VERSION
+        log.info('start request: %r', state)
+        if atyp == 1: # ipv4
+            dst_addr = socket.inet_ntoa(await reader.read(4))
+        elif atyp == 3: # domain
+            domain_len = ord(await reader.read(1))
+            dst_addr = await reader.read(domain_len)
+        dst_port = struct.unpack('>H', await reader.read(2))[0]
 
+        try:
+            if cmd == 1: # connect
+                # bind_address = ('127.0.0.1', 34567)
+                # log.info('bind address is %s', bind_address)
+                remote_reader, remote_writer = await asyncio.open_connection(dst_addr, dst_port)
+                bind_address = remote_writer.get_extra_info('sockname')
+                log.debug('remote: %s:%s', dst_addr, dst_port)
+                log.debug('bind: %s', bind_address)
 
-def verify_credentials(conn, username, passwd):
-    """
-    reference: rfc1929
-    Client:
+                bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
+                bind_port = bind_address[1]
+                # Success, rep = 0
+                reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 3, bind_port)
+        except Exception as err:
+            # Success, rep = 1
+            reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
+            log.error(err)
 
-           +----+------+----------+------+----------+
-           |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
-           +----+------+----------+------+----------+
-           | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
-           +----+------+----------+------+----------+
+        log.debug('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
+        writer.write(reply)
+        await writer.drain()
 
-    Server:
+        # start exchange data
+        if reply[1] == 0 and cmd == 1:
+            log.info('start exchange data: %r', state)
+            count = 0
+            while True:
+                log.info('reader reading...')
+                data = await reader.read(4096)
+                if data:
+                    remote_writer.write(data)
+                    await remote_writer.drain()
 
-                        +----+--------+
-                        |VER | STATUS |
-                        +----+--------+
-                        | 1  |   1    |
-                        +----+--------+
+                log.info('remote reader reading...')
+                data = await remote_reader.read(4096)
+                if data:
+                    writer.write(data)
+                    await writer.drain()
 
-    """
+                log.info('looping: %d', count)
+                count += 1
 
-    version = ord(conn.recv(1))
-    log.info('authentication version: %s', version)
-    assert version == AUTHENTICATION_VERSION
+                if not data:
+                    break
 
-    ulen = ord(conn.recv(1))
-    _username = conn.recv(ulen).decode('utf-8')
+            log.info('end exchange data: %r', state)
 
-    plen = ord(conn.recv(1))
-    _password = conn.recv(plen).decode('utf-8')
-
-    if _username == username and _password == passwd:
-        # Success, status = 0
-        response = struct.pack(">BB", version, 0)
-        conn.sendall(response)
-        return True
-
-    # Failure, status != 0
-    response = struct.pack(">BB", version, 1)
-    conn.sendall(response)
-    return False
-
+async def main():
+    server = await asyncio.start_server(start_proxy, HOST, PORT)
+    addr = server.sockets[0].getsockname()
+    log.info('Serving on %s', addr)
+    async with server:
+        await server.serve_forever()
 
 if __name__ == '__main__':
-    start_proxy()
+    asyncio.run(main())
