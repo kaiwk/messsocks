@@ -33,7 +33,66 @@ class State(Enum):
 
 
 def start_proxy(auth_method=NO_AUTH):
+    while True:
+        pass
+    pass
+
+
+def exchange_loop():
+    skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    skt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    skt.bind(ADDR)
+    skt.listen()
+    local_fds = [skt]
+    remote_skts = []
+    l2r_pairs = dict()
+    r2l_pairs = dict()
+
+    while True:
+        inputs = local_fds + remote_skts
+        rlist, wlist, elist = select.select(inputs, [], [], 3)
+        try:
+            for r in rlist:
+                if r == skt:
+                    lconn, dst_addr = r.accept()
+                    log.info('connected by %s', dst_addr)
+                    if start_connect(lconn, remote_skts):  # append new remote socket
+                        rskt = remote_skts[-1]
+                        rskt.setblocking(False)
+                        lconn.setblocking(False)
+                        local_fds.append(lconn)           # append new local client connection
+                        l2r_pairs[lconn] = rskt
+                        r2l_pairs[rskt] = lconn
+                else:
+                    data = r.recv(4096)
+                    if data:
+                        if r in l2r_pairs:
+                            l2r_pairs[r].send(data)
+                        elif r in r2l_pairs:
+                            r2l_pairs[r].send(data)
+                    else:
+                        if r in l2r_pairs:
+                            del l2r_pairs[r]
+                        elif r in r2l_pairs:
+                            del r2l_pairs[r]
+        except Exception:
+            local_fds = [skt]
+            remote_skts = []
+            l2r_pairs = dict()
+            r2l_pairs = dict()
+
+        # log.info('l2r_pairs: %s', l2r_pairs)
+        # log.info('r2l_pairs: %s', r2l_pairs)
+
+
+def start_connect(conn, remote_skts, auth_method=NO_AUTH):
     """
+    :param conn: client connection
+    :param remote_skts: remote socket list
+    :param auth_method:
+    :returns: success or not
+    :rtype: bool
+
     reference: rfc1928
 
     1. connect:
@@ -94,99 +153,59 @@ def start_proxy(auth_method=NO_AUTH):
         +----+-----+-------+------+----------+----------+
         | 1  |  1  | X'00' |  1   | Variable |    2     |
         +----+-----+-------+------+----------+----------+
-
     """
-    while True:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(ADDR)
-        s.listen()
-        conn, dst_addr = s.accept()
-        log.info('connected by %s', dst_addr)
-        state = State.CONNECT
-        if state == State.CONNECT:
-            ver, nmethods = struct.unpack('>BB', conn.recv(2))
-            log.info('start connect: %r', state)
-            methods = [ord(conn.recv(1)) for _ in range(nmethods)]
-            if ver == SOCKS_VERSION:
-                if auth_method in methods:
-                    conn.sendall(struct.pack('>BB', ver, auth_method))
-                if auth_method == NO_AUTH:
-                    state = State.REQUEST
-                elif auth_method == USERNAME_PASSWORD:
-                    state = State.VERIFY
 
-        if state == State.VERIFY:
-            if verify_credentials(conn, USERNAME, PASSWORD):
-                state = State.REQUEST
-            else:
-                state = State.CONNECT
-            log.info('state: %r', state)
+    # connect, verify credentials
+    ver, nmethods = struct.unpack('>BB', conn.recv(2))
+    methods = [ord(conn.recv(1)) for _ in range(nmethods)]
+    if ver == SOCKS_VERSION:
+        if auth_method in methods:
+            conn.sendall(struct.pack('>BB', ver, auth_method))
 
-        if state == State.REQUEST:
-            ver, cmd, _, atyp = struct.unpack('>BBBB', conn.recv(4))
-            assert ver == SOCKS_VERSION
-            log.info('start request: %r', state)
-            if atyp == 1: # ipv4
-                dst_addr = socket.inet_ntoa(conn.recv(4))
-            elif atyp == 3: # domain
-                domain_len = ord(conn.recv(1))
-                dst_addr = conn.recv(domain_len)
-            dst_port = struct.unpack('>H', conn.recv(2))[0]
+            if auth_method == USERNAME_PASSWORD:
+                if not verify_credentials(conn, USERNAME, PASSWORD):
+                    return False
+    log.info('connect success...')
 
-            try:
-                if cmd == 1: # connect
-                    remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    log.debug('remote: %s:%s', dst_addr, dst_port)
+    # after verification
+    ver, cmd, _, atyp = struct.unpack('>BBBB', conn.recv(4))
+    assert ver == SOCKS_VERSION
+    if atyp == 1: # ipv4
+        dst_addr = socket.inet_ntoa(conn.recv(4))
+    elif atyp == 3: # domain
+        domain_len = ord(conn.recv(1))
+        dst_addr = conn.recv(domain_len)
+    else:
+        return False
+    dst_port = struct.unpack('>H', conn.recv(2))[0]
 
-                    remote.connect((dst_addr, dst_port))
-                    bind_address = remote.getsockname()
-                    log.debug('bind: %s', bind_address)
+    try:
+        if cmd == 1: # connect
+            remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            log.info('remote: %s:%s', dst_addr, dst_port)
+            remote.connect((dst_addr, dst_port))
+            bind_address = remote.getsockname()
+            log.info('bind: %s', bind_address)
 
-                    bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
-                    bind_port = bind_address[1]
-                    # Success, rep = 0
-                    reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 3, bind_port)
-            except Exception as err:
-                # Success, rep = 1
-                reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
-                log.error(err)
+            bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
+            bind_port = bind_address[1]
+            # Success, rep = 0
+            reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 3, bind_port)
+    except Exception as err:
+        # Success, rep = 1
+        reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
+        log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
+        conn.sendall(reply)
+        log.error(err)
+        return False
 
-            log.debug('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
-            conn.sendall(reply)
+    conn.sendall(reply)
 
-            # start exchange data
-            if reply[1] == 0 and cmd == 1:
-                log.info('start exchange data: %r', state)
-                exchange_loop(conn, remote)
-                log.info('end exchange data: %r', state)
-            conn.close()
-            remote.close()
-            state = None
-        s.close()
-
-
-def exchange_loop(client, remote):
-    count = 0
-    while True:
-        r, w, e = select.select([client, remote], [], [], 3)
-
-        if r:
-            if client in r:
-                data = client.recv(4096)
-                if remote.send(data) <= 0:
-                    break
-
-            if remote in r:
-                data = remote.recv(4096)
-                if client.send(data) <= 0:
-                    break
-        else:
-            break
-
-        log.info('looping: %d', count)
-        log.info('read: %r', r)
-        count += 1
+    if reply[1] == 0 and cmd == 1:
+        remote_skts.append(remote)
+        log.info('start communication...')
+        return True
+    return False
 
 
 def verify_credentials(conn, username, passwd):
@@ -233,4 +252,4 @@ def verify_credentials(conn, username, passwd):
 
 
 if __name__ == '__main__':
-    start_proxy()
+    exchange_loop()
