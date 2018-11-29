@@ -21,10 +21,12 @@ def start_server():
         log.info('proxy server proxy_connected!')
 
         # start protocol
-        proxy_conn.sendall(struct.pack('!B', 1))
+        ver = struct.unpack('!B', proxy_conn.recv(1))[0]
+        assert ver == 1
         target_ip = socket.inet_ntoa(proxy_conn.recv(4))
         target_port = struct.unpack('!H', proxy_conn.recv(2))[0]
         log.info('target_ip: %s, target_port: %s', target_ip, target_port)
+        proxy_conn.sendall(struct.pack('!BB', 1, 1))
         # end protocol
 
         remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -47,6 +49,11 @@ def start_server():
                     if data:
                         log.info('proxy_conn send: data is not none')
                         proxy_conn.sendall(data)
+
+
+def remote_task(proxy_conn, ):
+
+    pass
 
 
 if __name__ == '__main__':

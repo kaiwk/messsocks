@@ -5,6 +5,8 @@ import logging.config
 
 from enum import Enum
 
+import exceptions as ex
+
 
 HOST = '127.0.0.1'
 PORT = 1081
@@ -35,59 +37,97 @@ class State(Enum):
     VERIFY = 2
 
 
-def connect_remote_proxy(lsconn, local_proxy):
-    ok, target_addr = start_connect(lsconn)
+def handle_protocol(local_skt, proxy_skt):
+    ok, target_addr = start_socks5(local_skt)
     if ok:
-        local_proxy.sendall(socket.inet_aton(target_addr[0]))
-        local_proxy.sendall(struct.pack('!H', target_addr[1]))
-    return ok
+        log.info('proxy skt: %s', proxy_skt)
+        proxy_skt.sendall(struct.pack('!B', 1)) # ver = 1
+        proxy_skt.sendall(socket.inet_aton(target_addr[0])) # ip
+        proxy_skt.sendall(struct.pack('!H', target_addr[1])) # port
+    else:
+        return False
+    ver, success = struct.unpack('!BB', proxy_skt.recv(2))
+    if ver == 1 and success == 1:
+        return True
+    return False
+
 
 def exchange_loop():
+    """
+    A simple protocol to communicate with remote proxy
+    client send:
+            | ver | ipv4 | port |
+            |-----+------+------|
+            |   1 |    4 |    2 |
+
+    server return:
+            | ver | success |
+            |-----+---------|
+            |   1 |       1 |
+    ver:
+        protocol version
+    success:
+        1: success
+        0: fail
+    """
     local_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     local_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     local_server.bind(ADDR)
     local_server.listen()
-    lsconn, _ = local_server.accept()
-    local_proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    # start protocol between local proxy and remote proxy
-    # TODO: design a decent protocol
-    local_proxy.connect((PROXY_IP, PROXY_PORT))
-    success = struct.unpack('!B', local_proxy.recv(1))[0]
-    # end protocol
+    proxy_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    proxy_conn = ProxyConnection(local_server, proxy_skt)
+    local_conn = LocalConnection(proxy_conn.connect(), proxy_conn)
 
-    if success:
-        connect_remote_proxy(lsconn, local_proxy)
-    local_proxy.setblocking(False)
-    lsconn.setblocking(False)
-
-    inputs = [local_server, local_proxy, lsconn]
-    local_data = None
-    proxy_data = None
+    inputs = [local_server, proxy_conn, local_conn]
     while True:
         rlist, wlist, elist = select.select(inputs, [], [])
         for r in rlist:
             if r is local_server:
-                lsconn, _ = local_server.accept()
-                connect_remote_proxy(lsconn, local_proxy)
-                lsconn.setblocking(False)
-                inputs.append(lsconn)
-                inputs.append(local_proxy)
-            elif r is local_proxy:
-                proxy_data = local_proxy.recv(4096)
-                if proxy_data:
-                    log.info('proxy data is not none')
-                    lsconn.sendall(proxy_data)
+                proxy_conn.connect()
             else:
-                local_data = r.recv(4096)
-                if local_data:
-                    log.info('local data is not none')
-                    local_proxy.sendall(local_data)
+                r.read()
 
 
-def start_connect(lsconn, auth_method=NO_AUTH):
+class ProxyConnection():
+    def __init__(self, local_server, proxy_skt):
+        self.local_server = local_server
+        self.local_skt, _ = local_server.accept()
+        self.proxy_skt = proxy_skt
+        self.proxy_skt.connect((PROXY_IP, PROXY_PORT))
+
+    def connect(self):
+        if handle_protocol(self.local_skt, self.proxy_skt):
+            return self.local_skt
+        raise ex.ProtocolException('Protocol resolution failed!')
+
+    def fileno(self):
+        return self.proxy_skt.fileno()
+
+    def read(self):
+        data = self.proxy_skt.recv(4096)
+        self.local_skt.sendall(data)
+
+    def send(self):
+        data = self.local_skt.recv(4096)
+        self.proxy_skt.sendall(data)
+
+
+class LocalConnection():
+    def __init__(self, local_skt, proxy_conn):
+        self.local_skt = local_skt
+        self.proxy_conn = proxy_conn
+
+    def fileno(self):
+        return self.local_skt.fileno()
+
+    def read(self):
+        self.proxy_conn.send()
+
+
+def start_socks5(local_skt, auth_method=NO_AUTH):
     """
-    :param lsconn: local server connection
+    :param local_skt: local server connection
     :param auth_method:
     :returns: True|False, (ip, port)
     :rtype: bool, tuple
@@ -155,28 +195,29 @@ def start_connect(lsconn, auth_method=NO_AUTH):
     """
 
     # connect, verify credentials
-    ver, nmethods = struct.unpack('!BB', lsconn.recv(2))
-    methods = [ord(lsconn.recv(1)) for _ in range(nmethods)]
+    ver, nmethods = struct.unpack('!BB', local_skt.recv(2))
+    methods = [ord(local_skt.recv(1)) for _ in range(nmethods)]
     if ver == SOCKS_VERSION:
         if auth_method in methods:
-            lsconn.sendall(struct.pack('!BB', ver, auth_method))
+            local_skt.sendall(struct.pack('!BB', ver, auth_method))
 
             if auth_method == USERNAME_PASSWORD:
-                if not verify_credentials(lsconn, USERNAME, PASSWORD):
+                if not verify_credentials(local_skt, USERNAME, PASSWORD):
                     return False, ()
     log.info('connect success...')
 
     # after verification
-    ver, cmd, _, atyp = struct.unpack('!BBBB', lsconn.recv(4))
+    ver, cmd, _, atyp = struct.unpack('!BBBB', local_skt.recv(4))
+    log.error('socks version: %s', ver)
     assert ver == SOCKS_VERSION
     if atyp == 1: # ipv4
-        target_ip = socket.inet_ntoa(lsconn.recv(4))
+        target_ip = socket.inet_ntoa(local_skt.recv(4))
     elif atyp == 3: # domain
-        domain_len = ord(lsconn.recv(1))
-        target_ip = lsconn.recv(domain_len)
+        domain_len = ord(local_skt.recv(1))
+        target_ip = local_skt.recv(domain_len)
     else:
         return False, ()
-    target_port = struct.unpack('!H', lsconn.recv(2))[0]
+    target_port = struct.unpack('!H', local_skt.recv(2))[0]
 
     if cmd == 1: # connect
         try:
@@ -187,11 +228,11 @@ def start_connect(lsconn, auth_method=NO_AUTH):
             # Failed, rep = 1
             reply = struct.pack('!BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
             log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
-            lsconn.sendall(reply)
+            local_skt.sendall(reply)
             log.error(err)
             return False, ()
 
-    lsconn.sendall(reply)
+    local_skt.sendall(reply)
 
     if reply[1] == 0 and cmd == 1:
         log.info('start communication...')
