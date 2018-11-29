@@ -32,12 +32,6 @@ class State(Enum):
     VERIFY = 2
 
 
-def start_proxy(auth_method=NO_AUTH):
-    while True:
-        pass
-    pass
-
-
 def exchange_loop():
     skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     skt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -182,19 +176,15 @@ def start_connect(conn, remote_skts, auth_method=NO_AUTH):
     try:
         if cmd == 1: # connect
             remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            remote.settimeout(2)
             log.info('remote: %s:%s', dst_addr, dst_port)
             remote.connect((dst_addr, dst_port))
-            bind_address = remote.getsockname()
-            log.info('bind: %s', bind_address)
-
-            bind_addr = struct.unpack('>I', socket.inet_aton(bind_address[0]))[0]
-            bind_port = bind_address[1]
             # Success, rep = 0
-            reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 3, bind_port)
+            reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 0, 0)
     except Exception as err:
-        # Success, rep = 1
-        reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, bind_addr, bind_port)
-        log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, bind_addr, bind_port)
+        # Failed, rep = 1
+        reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
+        log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
         conn.sendall(reply)
         log.error(err)
         return False
