@@ -47,7 +47,6 @@ def start_server():
                     if data:
                         log.info('proxy_conn send: data is not none')
                         proxy_conn.sendall(data)
-                log.info(data)
 
 
 if __name__ == '__main__':

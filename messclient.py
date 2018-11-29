@@ -35,45 +35,62 @@ class State(Enum):
     VERIFY = 2
 
 
+def connect_remote_proxy(lsconn, local_proxy):
+    ok, target_addr = start_connect(lsconn)
+    if ok:
+        local_proxy.sendall(socket.inet_aton(target_addr[0]))
+        local_proxy.sendall(struct.pack('!H', target_addr[1]))
+    return ok
+
 def exchange_loop():
     local_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     local_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     local_server.bind(ADDR)
     local_server.listen()
+    lsconn, _ = local_server.accept()
     local_proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    inputs = [local_server]
+    # start protocol between local proxy and remote proxy
+    # TODO: design a decent protocol
+    local_proxy.connect((PROXY_IP, PROXY_PORT))
+    success = struct.unpack('!B', local_proxy.recv(1))[0]
+    # end protocol
+
+    if success:
+        connect_remote_proxy(lsconn, local_proxy)
+    local_proxy.setblocking(False)
+    lsconn.setblocking(False)
+
+    inputs = [local_server, local_proxy, lsconn]
     local_data = None
     proxy_data = None
     while True:
         rlist, wlist, elist = select.select(inputs, [], [])
-
         for r in rlist:
             if r is local_server:
                 lsconn, _ = local_server.accept()
-                local_proxy.setblocking(True)
-                start_connect(lsconn, local_proxy)
+                connect_remote_proxy(lsconn, local_proxy)
                 lsconn.setblocking(False)
-                local_proxy.setblocking(False)
                 inputs.append(lsconn)
                 inputs.append(local_proxy)
             elif r is local_proxy:
                 proxy_data = local_proxy.recv(4096)
                 if proxy_data:
+                    log.info('proxy data is not none')
                     lsconn.sendall(proxy_data)
             else:
                 local_data = r.recv(4096)
                 if local_data:
+                    log.info('local data is not none')
                     local_proxy.sendall(local_data)
 
 
-def start_connect(lsconn, local_proxy, auth_method=NO_AUTH):
+def start_connect(lsconn, auth_method=NO_AUTH):
     """
     :param lsconn: local server connection
-    :param local_proxy: local proxy socket
     :param auth_method:
-    :returns: success or not
-    :rtype: bool
+    :returns: True|False, (ip, port)
+    :rtype: bool, tuple
 
     reference: rfc1928
 
@@ -146,7 +163,7 @@ def start_connect(lsconn, local_proxy, auth_method=NO_AUTH):
 
             if auth_method == USERNAME_PASSWORD:
                 if not verify_credentials(lsconn, USERNAME, PASSWORD):
-                    return False
+                    return False, ()
     log.info('connect success...')
 
     # after verification
@@ -158,40 +175,27 @@ def start_connect(lsconn, local_proxy, auth_method=NO_AUTH):
         domain_len = ord(lsconn.recv(1))
         target_ip = lsconn.recv(domain_len)
     else:
-        return False
+        return False, ()
     target_port = struct.unpack('!H', lsconn.recv(2))[0]
 
-    try:
-        if cmd == 1: # connect
-            log.info('local_proxy: %s:%s', target_ip, target_port)
-
-            # start protocol between local proxy and remote proxy
-            try:
-                local_proxy.connect((PROXY_IP, PROXY_PORT))
-            except OSError:
-                pass
-
-            success = struct.unpack('!B', local_proxy.recv(1))[0]
-            if success == 1:
-                log.info('success: %s', success)
-                # send  target ip, port
-                local_proxy.sendall(socket.inet_aton(target_ip))
-                local_proxy.sendall(struct.pack('!H', target_port))
-            # end protocol
-
+    if cmd == 1: # connect
+        try:
+            log.info('target: %s:%s', target_ip, target_port)
             # Success, rep = 0
             reply = struct.pack('!BBBBIH', SOCKS_VERSION, 0, 0, atyp, 0, 0)
-    except Exception as err:
-        # Failed, rep = 1
-        reply = struct.pack('!BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
-        log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
-        lsconn.sendall(reply)
-        log.error(err)
-        return False
+        except Exception as err:
+            # Failed, rep = 1
+            reply = struct.pack('!BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
+            log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
+            lsconn.sendall(reply)
+            log.error(err)
+            return False, ()
 
     lsconn.sendall(reply)
-    log.info('start communication...')
-    return reply[1] == 0 and cmd == 1
+
+    if reply[1] == 0 and cmd == 1:
+        log.info('start communication...')
+        return True, (target_ip, target_port)
 
 
 def verify_credentials(conn, username, passwd):
