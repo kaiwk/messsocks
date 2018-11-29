@@ -22,6 +22,9 @@ PASSWORD = 'password'
 SERVER_IP = '127.0.0.1'
 SERVER_PORT = 34561
 
+PROXY_IP = '127.0.0.1'
+PROXY_PORT = 45678
+
 logging.config.fileConfig('logging.conf')
 log = logging.getLogger('messsocks')
 
@@ -33,56 +36,41 @@ class State(Enum):
 
 
 def exchange_loop():
-    skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    skt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    skt.bind(ADDR)
-    skt.listen()
-    local_fds = [skt]
-    remote_skts = []
-    l2r_pairs = dict()
-    r2l_pairs = dict()
+    local_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    local_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    local_server.bind(ADDR)
+    local_server.listen()
+    local_proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
+    inputs = [local_server]
+    local_data = None
+    proxy_data = None
     while True:
-        inputs = local_fds + remote_skts
-        rlist, wlist, elist = select.select(inputs, [], [], 3)
-        try:
-            for r in rlist:
-                if r == skt:
-                    lconn, dst_addr = r.accept()
-                    log.info('connected by %s', dst_addr)
-                    if start_connect(lconn, remote_skts):  # append new remote socket
-                        rskt = remote_skts[-1]
-                        rskt.setblocking(False)
-                        lconn.setblocking(False)
-                        local_fds.append(lconn)           # append new local client connection
-                        l2r_pairs[lconn] = rskt
-                        r2l_pairs[rskt] = lconn
-                else:
-                    data = r.recv(4096)
-                    if data:
-                        if r in l2r_pairs:
-                            l2r_pairs[r].send(data)
-                        elif r in r2l_pairs:
-                            r2l_pairs[r].send(data)
-                    else:
-                        if r in l2r_pairs:
-                            del l2r_pairs[r]
-                        elif r in r2l_pairs:
-                            del r2l_pairs[r]
-        except Exception:
-            local_fds = [skt]
-            remote_skts = []
-            l2r_pairs = dict()
-            r2l_pairs = dict()
+        rlist, wlist, elist = select.select(inputs, [], [])
 
-        # log.info('l2r_pairs: %s', l2r_pairs)
-        # log.info('r2l_pairs: %s', r2l_pairs)
+        for r in rlist:
+            if r is local_server:
+                lsconn, _ = local_server.accept()
+                local_proxy.setblocking(True)
+                start_connect(lsconn, local_proxy)
+                lsconn.setblocking(False)
+                local_proxy.setblocking(False)
+                inputs.append(lsconn)
+                inputs.append(local_proxy)
+            elif r is local_proxy:
+                proxy_data = local_proxy.recv(4096)
+                if proxy_data:
+                    lsconn.sendall(proxy_data)
+            else:
+                local_data = r.recv(4096)
+                if local_data:
+                    local_proxy.sendall(local_data)
 
 
-def start_connect(conn, remote_skts, auth_method=NO_AUTH):
+def start_connect(lsconn, local_proxy, auth_method=NO_AUTH):
     """
-    :param conn: client connection
-    :param remote_skts: remote socket list
+    :param lsconn: local server connection
+    :param local_proxy: local proxy socket
     :param auth_method:
     :returns: success or not
     :rtype: bool
@@ -137,7 +125,7 @@ def start_connect(conn, remote_skts, auth_method=NO_AUTH):
         - DOMAINNAME: X'03', first byte is length of domain name
         - IP V6 address: X'04'
         DST.ADDR       desired destination address
-        DST.PORT desired destination dst_port in network octet
+        DST.PORT desired destination target_port in network octet
         order
 
     Server:
@@ -150,52 +138,60 @@ def start_connect(conn, remote_skts, auth_method=NO_AUTH):
     """
 
     # connect, verify credentials
-    ver, nmethods = struct.unpack('>BB', conn.recv(2))
-    methods = [ord(conn.recv(1)) for _ in range(nmethods)]
+    ver, nmethods = struct.unpack('!BB', lsconn.recv(2))
+    methods = [ord(lsconn.recv(1)) for _ in range(nmethods)]
     if ver == SOCKS_VERSION:
         if auth_method in methods:
-            conn.sendall(struct.pack('>BB', ver, auth_method))
+            lsconn.sendall(struct.pack('!BB', ver, auth_method))
 
             if auth_method == USERNAME_PASSWORD:
-                if not verify_credentials(conn, USERNAME, PASSWORD):
+                if not verify_credentials(lsconn, USERNAME, PASSWORD):
                     return False
     log.info('connect success...')
 
     # after verification
-    ver, cmd, _, atyp = struct.unpack('>BBBB', conn.recv(4))
+    ver, cmd, _, atyp = struct.unpack('!BBBB', lsconn.recv(4))
     assert ver == SOCKS_VERSION
     if atyp == 1: # ipv4
-        dst_addr = socket.inet_ntoa(conn.recv(4))
+        target_ip = socket.inet_ntoa(lsconn.recv(4))
     elif atyp == 3: # domain
-        domain_len = ord(conn.recv(1))
-        dst_addr = conn.recv(domain_len)
+        domain_len = ord(lsconn.recv(1))
+        target_ip = lsconn.recv(domain_len)
     else:
         return False
-    dst_port = struct.unpack('>H', conn.recv(2))[0]
+    target_port = struct.unpack('!H', lsconn.recv(2))[0]
 
     try:
         if cmd == 1: # connect
-            remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            remote.settimeout(2)
-            log.info('remote: %s:%s', dst_addr, dst_port)
-            remote.connect((dst_addr, dst_port))
+            log.info('local_proxy: %s:%s', target_ip, target_port)
+
+            # start protocol between local proxy and remote proxy
+            try:
+                local_proxy.connect((PROXY_IP, PROXY_PORT))
+            except OSError:
+                pass
+
+            success = struct.unpack('!B', local_proxy.recv(1))[0]
+            if success == 1:
+                log.info('success: %s', success)
+                # send  target ip, port
+                local_proxy.sendall(socket.inet_aton(target_ip))
+                local_proxy.sendall(struct.pack('!H', target_port))
+            # end protocol
+
             # Success, rep = 0
-            reply = struct.pack('>BBBBIH', SOCKS_VERSION, 0, 0, atyp, 0, 0)
+            reply = struct.pack('!BBBBIH', SOCKS_VERSION, 0, 0, atyp, 0, 0)
     except Exception as err:
         # Failed, rep = 1
-        reply = struct.pack('>BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
+        reply = struct.pack('!BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
         log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
-        conn.sendall(reply)
+        lsconn.sendall(reply)
         log.error(err)
         return False
 
-    conn.sendall(reply)
-
-    if reply[1] == 0 and cmd == 1:
-        remote_skts.append(remote)
-        log.info('start communication...')
-        return True
-    return False
+    lsconn.sendall(reply)
+    log.info('start communication...')
+    return reply[1] == 0 and cmd == 1
 
 
 def verify_credentials(conn, username, passwd):
