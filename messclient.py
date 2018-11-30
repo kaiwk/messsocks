@@ -36,70 +36,79 @@ class State(Enum):
     REQUEST = 1
     VERIFY = 2
 
-
-def handle_protocol(local_skt, proxy_skt):
-    ok, target_addr = start_socks5(local_skt)
-    if ok:
-        log.info('proxy skt: %s', proxy_skt)
-        proxy_skt.sendall(struct.pack('!B', 1)) # ver = 1
-        proxy_skt.sendall(socket.inet_aton(target_addr[0])) # ip
-        proxy_skt.sendall(struct.pack('!H', target_addr[1])) # port
-    else:
-        return False
-    ver, success = struct.unpack('!BB', proxy_skt.recv(2))
-    if ver == 1 and success == 1:
-        return True
-    return False
-
-
 def exchange_loop():
-    """
-    A simple protocol to communicate with remote proxy
+    """A simple protocol to communicate with remote proxy
     client send:
-            | ver | ipv4 | port |
-            |-----+------+------|
-            |   1 |    4 |    2 |
 
+            | ver | type | ipv4 | port |
+            |-----+------+------+------|
+            |   1 |    1 |    4 |    2 |
+
+    ver: protocol version
+    type: data frame type
+
+    or
+            | ver | type |
+            |-----+------| + data
+            |   1 |    0 |
+
+
+    Explanation:
+
+    type == 1, means its a new request, next 6 bytes is target address, so
     server return:
+
             | ver | success |
             |-----+---------|
             |   1 |       1 |
-    ver:
-        protocol version
+
     success:
         1: success
         0: fail
+
+    type == 0, means its a normal data frames, server return normal data frames
+    from target.
+
     """
     local_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     local_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     local_server.bind(ADDR)
     local_server.listen()
-
-    proxy_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    proxy_conn = ProxyConnection(local_server, proxy_skt)
-    local_conn = LocalConnection(proxy_conn.connect(), proxy_conn)
+    local_conn = LocalConnection(local_server)
+    proxy_conn = ProxyConnection(local_conn.local_skt)
+    local_conn.proxy_conn = proxy_conn
+    # socks5 and protocol
+    ok, target_addr = local_conn.handle_socks5()
+    proxy_conn.connect(target_addr)
 
     inputs = [local_server, proxy_conn, local_conn]
     while True:
         rlist, wlist, elist = select.select(inputs, [], [])
         for r in rlist:
             if r is local_server:
-                proxy_conn.connect()
+                local_conn = LocalConnection(local_server)
+                proxy_conn = ProxyConnection(local_conn.local_skt)
+                local_conn.proxy_conn = proxy_conn
+                # socks5 and protocol
+                ok, target_addr = local_conn.handle_socks5()
+                proxy_conn.connect(target_addr)
+                inputs.append(local_conn)
+                inputs.append(proxy_conn)
             else:
                 r.read()
 
 
-class ProxyConnection():
-    def __init__(self, local_server, proxy_skt):
-        self.local_server = local_server
-        self.local_skt, _ = local_server.accept()
-        self.proxy_skt = proxy_skt
-        self.proxy_skt.connect((PROXY_IP, PROXY_PORT))
 
-    def connect(self):
-        if handle_protocol(self.local_skt, self.proxy_skt):
-            return self.local_skt
-        raise ex.ProtocolException('Protocol resolution failed!')
+class ProxyConnection():
+    def __init__(self, local_skt):
+        self.proxy_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.local_skt = local_skt
+
+    def connect(self, target_addr):
+        if self.handle_protocol(target_addr):
+            pass
+        else:
+            raise ex.ProtocolException('Protocol resolution failed!')
 
     def fileno(self):
         return self.proxy_skt.fileno()
@@ -110,12 +119,29 @@ class ProxyConnection():
 
     def send(self):
         data = self.local_skt.recv(4096)
+        head = struct.pack('!BB', 1, 0) # ver = 1, type = 0
+        self.proxy_skt.sendall(head)
         self.proxy_skt.sendall(data)
+
+    def handle_protocol(self, target_addr):
+        """
+        :param target_addr: (ip, port)
+        :returns: bool, connect success|failed
+        :rtype:
+        """
+        self.proxy_skt.connect((PROXY_IP, PROXY_PORT))
+        self.proxy_skt.sendall(struct.pack('!BB', 1, 1)) # ver = 1, type = 1
+        self.proxy_skt.sendall(socket.inet_aton(target_addr[0])) # ip
+        self.proxy_skt.sendall(struct.pack('!H', target_addr[1])) # port
+        ver, success = struct.unpack('!BB', self.proxy_skt.recv(2))
+        if ver == 1 and success == 1:
+            return True
+        return False
 
 
 class LocalConnection():
-    def __init__(self, local_skt, proxy_conn):
-        self.local_skt = local_skt
+    def __init__(self, local_server, proxy_conn=None):
+        self.local_skt, _ = local_server.accept()
         self.proxy_conn = proxy_conn
 
     def fileno(self):
@@ -124,119 +150,118 @@ class LocalConnection():
     def read(self):
         self.proxy_conn.send()
 
+    def handle_socks5(self, auth_method=NO_AUTH):
+        """
+        :param local_skt: local server connection
+        :param auth_method:
+        :returns: True|False, (ip, port)
+        :rtype: bool, tuple
 
-def start_socks5(local_skt, auth_method=NO_AUTH):
-    """
-    :param local_skt: local server connection
-    :param auth_method:
-    :returns: True|False, (ip, port)
-    :rtype: bool, tuple
+        reference: rfc1928
 
-    reference: rfc1928
+        1. connect:
 
-    1. connect:
+        Client:
+                       +----+----------+----------+
+                       |VER | NMETHODS | METHODS  |
+                       +----+----------+----------+
+                       | 1  |    1     | 1 to 255 |
+                       +----+----------+----------+
 
-    Client:
-                   +----+----------+----------+
-                   |VER | NMETHODS | METHODS  |
-                   +----+----------+----------+
-                   | 1  |    1     | 1 to 255 |
-                   +----+----------+----------+
+        NMETHODS: number of methods
+        METHODS:
+            - X'00' NO AUTHENTICATION REQUIRED
+            - X'01' GSSAPI
+            - X'02' USERNAME/PASSWORD
+            - X'03' to X'7F' IANA ASSIGNED
+            - X'80' to X'FE' RESERVED FOR PRIVATE METHODS
+            - X'FF' NO ACCEPTABLE METHODS
 
-    NMETHODS: number of methods
-    METHODS:
-        - X'00' NO AUTHENTICATION REQUIRED
-        - X'01' GSSAPI
-        - X'02' USERNAME/PASSWORD
-        - X'03' to X'7F' IANA ASSIGNED
-        - X'80' to X'FE' RESERVED FOR PRIVATE METHODS
-        - X'FF' NO ACCEPTABLE METHODS
+        Server:
+                             +----+--------+
+                             |VER | METHOD |
+                             +----+--------+
+                             | 1  |   1    |
+                             +----+--------+
 
-    Server:
-                         +----+--------+
-                         |VER | METHOD |
-                         +----+--------+
-                         | 1  |   1    |
-                         +----+--------+
+        Server select a method.
 
-    Server select a method.
+        2. request
 
-    2. request
+        Client:
 
-    Client:
+            +----+-----+-------+------+----------+----------+
+            |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+            +----+-----+-------+------+----------+----------+
+            | 1  |  1  | X'00' |  1   | Variable |    2     |
+            +----+-----+-------+------+----------+----------+
 
-        +----+-----+-------+------+----------+----------+
-        |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
-        +----+-----+-------+------+----------+----------+
-        | 1  |  1  | X'00' |  1   | Variable |    2     |
-        +----+-----+-------+------+----------+----------+
+        VER: protocol version: X'05'
+        CMD
+            - CONNECT X'01'
+            - BIND X'02'
+            - UDP ASSOCIATE X'03'
+        RSV: RESERVED
+        ATYP: address type of following address
+            - IP V4 address: X'01'
+            - DOMAINNAME: X'03', first byte is length of domain name
+            - IP V6 address: X'04'
+            DST.ADDR       desired destination address
+            DST.PORT desired destination target_port in network octet
+            order
 
-    VER: protocol version: X'05'
-    CMD
-        - CONNECT X'01'
-        - BIND X'02'
-        - UDP ASSOCIATE X'03'
-    RSV: RESERVED
-    ATYP: address type of following address
-        - IP V4 address: X'01'
-        - DOMAINNAME: X'03', first byte is length of domain name
-        - IP V6 address: X'04'
-        DST.ADDR       desired destination address
-        DST.PORT desired destination target_port in network octet
-        order
+        Server:
 
-    Server:
+            +----+-----+-------+------+----------+----------+
+            |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+            +----+-----+-------+------+----------+----------+
+            | 1  |  1  | X'00' |  1   | Variable |    2     |
+            +----+-----+-------+------+----------+----------+
+        """
 
-        +----+-----+-------+------+----------+----------+
-        |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-        +----+-----+-------+------+----------+----------+
-        | 1  |  1  | X'00' |  1   | Variable |    2     |
-        +----+-----+-------+------+----------+----------+
-    """
+        # connect, verify credentials
+        ver, nmethods = struct.unpack('!BB', self.local_skt.recv(2))
+        methods = [ord(self.local_skt.recv(1)) for _ in range(nmethods)]
+        if ver == SOCKS_VERSION:
+            if auth_method in methods:
+                self.local_skt.sendall(struct.pack('!BB', ver, auth_method))
 
-    # connect, verify credentials
-    ver, nmethods = struct.unpack('!BB', local_skt.recv(2))
-    methods = [ord(local_skt.recv(1)) for _ in range(nmethods)]
-    if ver == SOCKS_VERSION:
-        if auth_method in methods:
-            local_skt.sendall(struct.pack('!BB', ver, auth_method))
+                if auth_method == USERNAME_PASSWORD:
+                    if not verify_credentials(self.local_skt, USERNAME, PASSWORD):
+                        return False, ()
+        log.info('connect success...')
 
-            if auth_method == USERNAME_PASSWORD:
-                if not verify_credentials(local_skt, USERNAME, PASSWORD):
-                    return False, ()
-    log.info('connect success...')
-
-    # after verification
-    ver, cmd, _, atyp = struct.unpack('!BBBB', local_skt.recv(4))
-    log.error('socks version: %s', ver)
-    assert ver == SOCKS_VERSION
-    if atyp == 1: # ipv4
-        target_ip = socket.inet_ntoa(local_skt.recv(4))
-    elif atyp == 3: # domain
-        domain_len = ord(local_skt.recv(1))
-        target_ip = local_skt.recv(domain_len)
-    else:
-        return False, ()
-    target_port = struct.unpack('!H', local_skt.recv(2))[0]
-
-    if cmd == 1: # connect
-        try:
-            log.info('target: %s:%s', target_ip, target_port)
-            # Success, rep = 0
-            reply = struct.pack('!BBBBIH', SOCKS_VERSION, 0, 0, atyp, 0, 0)
-        except Exception as err:
-            # Failed, rep = 1
-            reply = struct.pack('!BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
-            log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
-            local_skt.sendall(reply)
-            log.error(err)
+        # after verification
+        ver, cmd, _, atyp = struct.unpack('!BBBB', self.local_skt.recv(4))
+        log.error('socks version: %s', ver)
+        assert ver == SOCKS_VERSION
+        if atyp == 1: # ipv4
+            target_ip = socket.inet_ntoa(self.local_skt.recv(4))
+        elif atyp == 3: # domain
+            domain_len = ord(self.local_skt.recv(1))
+            target_ip = self.local_skt.recv(domain_len)
+        else:
             return False, ()
+        target_port = struct.unpack('!H', self.local_skt.recv(2))[0]
 
-    local_skt.sendall(reply)
+        if cmd == 1: # connect
+            try:
+                log.info('target: %s:%s', target_ip, target_port)
+                # Success, rep = 0
+                reply = struct.pack('!BBBBIH', SOCKS_VERSION, 0, 0, atyp, 0, 0)
+            except Exception as err:
+                # Failed, rep = 1
+                reply = struct.pack('!BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
+                log.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
+                self.local_skt.sendall(reply)
+                log.error(err)
+                return False, ()
 
-    if reply[1] == 0 and cmd == 1:
-        log.info('start communication...')
-        return True, (target_ip, target_port)
+        self.local_skt.sendall(reply)
+
+        if reply[1] == 0 and cmd == 1:
+            log.info('start communication...')
+            return True, (target_ip, target_port)
 
 
 def verify_credentials(conn, username, passwd):

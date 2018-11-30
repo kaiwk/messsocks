@@ -12,48 +12,86 @@ log = logging.getLogger('messsocks')
 
 
 def start_server():
-    skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    skt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    skt.bind((PROXY_IP, PROXY_PORT))
-    skt.listen()
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((PROXY_IP, PROXY_PORT))
+    server.listen()
     while True:
-        proxy_conn, _ = skt.accept()
-        log.info('proxy server proxy_connected!')
+        # bootstrap
+        proxy_conn = ProxyConnection(server)
+        log.info('proxy server connected!')
+        target_skt = proxy_conn.serve()
+        proxy_conn.target_skt = target_skt
+        target_conn = TargetConnection(target_skt, proxy_conn)
 
-        # start protocol
-        ver = struct.unpack('!B', proxy_conn.recv(1))[0]
-        assert ver == 1
-        target_ip = socket.inet_ntoa(proxy_conn.recv(4))
-        target_port = struct.unpack('!H', proxy_conn.recv(2))[0]
-        log.info('target_ip: %s, target_port: %s', target_ip, target_port)
-        proxy_conn.sendall(struct.pack('!BB', 1, 1))
-        # end protocol
-
-        remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        remote.connect((target_ip, target_port))
-
-        proxy_conn.setblocking(False)
-        remote.setblocking(False)
-
-        inputs = [proxy_conn, remote]
+        inputs = [server, proxy_conn, target_conn]
         while True:
             rlist, wlist, elist = select.select(inputs, [], [])
             for r in rlist:
-                if r is proxy_conn:
-                    data = proxy_conn.recv(4096)
-                    if data:
-                        log.info('remote send: data is not none')
-                        remote.sendall(data)
-                elif r is remote:
-                    data = remote.recv(4096)
-                    if data:
-                        log.info('proxy_conn send: data is not none')
-                        proxy_conn.sendall(data)
+                if r is server:
+                    proxy_conn = ProxyConnection(server)
+                    proxy_conn.proxy_skt.setblocking(False)
+                    target_skt = proxy_conn.serve()
+                    target_skt.setblocking(False)
+                    proxy_conn.target_skt = target_skt
+                    target_conn = TargetConnection(target_skt, proxy_conn)
+                    inputs.append(proxy_conn)
+                    inputs.append(target_conn)
+                else:
+                    if type(r) is ProxyConnection:
+                        r.handle_protocol()
+                    try:
+                        r.read()
+                    except BrokenPipeError:
+                        inputs.remove(r)
 
 
-def remote_task(proxy_conn, ):
+class ProxyConnection():
+    def __init__(self, server, target_skt=None):
+        self.proxy_skt, _ = server.accept()
+        self.target_skt = target_skt
 
-    pass
+    def serve(self):
+        """
+        New target socket
+        """
+        target_skt = self.handle_protocol()
+        return target_skt
+
+    def fileno(self):
+        return self.proxy_skt.fileno()
+
+    def read(self):
+        data = self.proxy_skt.recv(4096)
+        self.target_skt.sendall(data)
+
+    def send(self):
+        data = self.target_skt.recv(4096)
+        self.proxy_skt.sendall(data)
+
+    def handle_protocol(self):
+        ver, connect_type = struct.unpack('!BB', self.proxy_skt.recv(2))
+        assert ver == 1
+        if connect_type == 1:
+            target_ip = socket.inet_ntoa(self.proxy_skt.recv(4))
+            target_port = struct.unpack('!H', self.proxy_skt.recv(2))[0]
+            self.proxy_skt.sendall(struct.pack('!BB', 1, 1))
+            target_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            target_skt.connect((target_ip, target_port))
+            return target_skt
+        return None
+
+
+class TargetConnection():
+    def __init__(self, target_skt, proxy_conn):
+        self.proxy_conn = proxy_conn
+        self.target_skt = target_skt
+
+    def fileno(self):
+        return self.target_skt.fileno()
+
+    def read(self):
+        self.proxy_conn.send()
 
 
 if __name__ == '__main__':
