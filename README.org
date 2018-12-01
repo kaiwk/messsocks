@@ -1,0 +1,4 @@
+* Messsocks
+The design is messy, the code is messy, so it's called messsocks.
+
+Tested with cURL and browser proxy.
