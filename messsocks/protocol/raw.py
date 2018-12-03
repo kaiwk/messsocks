@@ -32,7 +32,6 @@ import socket
 
 import messsocks.exception as ex
 from messsocks.log import get_logger
-from messsocks.utils import ip2int
 
 PROXY_IP = '127.0.0.1'
 PROXY_PORT = 45678

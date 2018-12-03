@@ -8,5 +8,5 @@ def get_logger(name):
     :rtype: logger
 
     """
-    logging.config.fileConfig('logging.conf')
+    logging.config.fileConfig('../logging.conf')
     return logging.getLogger(name)

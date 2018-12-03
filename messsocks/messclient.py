@@ -5,10 +5,9 @@ import threading
 
 from enum import Enum
 
-import exception as ex
 from log import get_logger
 from utils import ip2int
-from messsocks.protocol import socks5, raw
+from protocol import socks5
 
 HOST = '127.0.0.1'
 PORT = 1081
