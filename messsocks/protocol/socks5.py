@@ -101,7 +101,14 @@ def serve(local_skt, auth_method=NO_AUTH):
 
     logger.info('verify success...')
     # after verification
-    ver, cmd, _, atyp = struct.unpack('!BBBB', local_skt.recv(4))
+
+    try:
+        ptl_head = local_skt.recv(4)
+        ver, cmd, _, atyp = struct.unpack('!BBBB', ptl_head)
+    except (ConnectionResetError, struct.error) as e:
+        logger.error(e)
+        return False, (None, None)
+
     assert ver == SOCKS_VERSION
 
     if atyp == 1: # ipv4

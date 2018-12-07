@@ -5,6 +5,7 @@ import threading
 
 from enum import Enum
 
+import exception as ex
 from log import get_logger
 from utils import ip2int
 from protocol import socks5
@@ -70,17 +71,12 @@ def exchange_loop():
         proxy_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         local_conn = LocalConnection(local_skt, proxy_skt)
         proxy_conn = ProxyConnection(local_skt, proxy_skt)
-
-        # socks5 and protocol
         try:
-            ok, target_addr = socks5.serve(local_conn.local_skt)
-        except struct.error:
+            local_conn.handle_protocol()
+            proxy_conn.handle_protocol(local_conn.target_addr)
+        except ex.ProtocolException as err:
+            logger.error(err)
             continue
-
-        if not ok:
-            continue
-
-        proxy_conn.handle_protocol(target_addr)
         glogger.info('start connecting proxy server')
         threading.Thread(target=relay, args=(local_conn, proxy_conn)).start()
         logger.debug('Thread count: %s', threading.active_count())
@@ -94,13 +90,13 @@ def relay(local_conn, proxy_conn):
     inputs = [proxy_conn, local_conn]
     while True:
         try:
-            rlist, wlist, elist = select.select(inputs, [], [])
+            rlist, wlist, elist = select.select(inputs, [], [], 5)
         except ValueError:
             break
         for r in rlist:
             try:
                 r.read()
-            except ConnectionResetError:
+            except (ConnectionResetError, BrokenPipeError):
                 break
 
 class ProxyConnection():
@@ -131,7 +127,10 @@ class ProxyConnection():
         ip, port = target_addr
         ip = ip2int(ip)
         head = struct.pack('!BBIH', 1, 1, ip, port)
-        self.proxy_skt.connect((PROXY_IP, PROXY_PORT))
+        try:
+            self.proxy_skt.connect((PROXY_IP, PROXY_PORT))
+        except ConnectionRefusedError:
+            raise ex.ProtocolException('proxy socket connect failed')
         self.proxy_skt.sendall(head)
         return True
 
@@ -140,6 +139,7 @@ class LocalConnection():
     def __init__(self, local_skt, proxy_skt):
         self.local_skt = local_skt
         self.proxy_skt = proxy_skt
+        self.target_addr = None
 
     def fileno(self):
         return self.local_skt.fileno()
@@ -152,7 +152,11 @@ class LocalConnection():
         self.proxy_skt.sendall(data)
 
     def handle_protocol(self):
-        pass
+        ok, target_addr = socks5.serve(self.local_skt)
+        if ok:
+            self.target_addr = target_addr
+        else:
+            raise ex.ProtocolException('socks5 resolution falied')
 
     def close(self):
         self.local_skt.close()

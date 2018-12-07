@@ -3,6 +3,7 @@ import struct
 import select
 import threading
 
+import exception as ex
 from log import get_logger
 from protocol import raw
 
@@ -23,7 +24,8 @@ def start_server():
         proxy_conn = ProxyConnection(proxy_skt)
         try:
             proxy_conn.handle_protocol()
-        except (socket.timeout, ConnectionRefusedError):
+        except ex.ProtocolException as err:
+            logger.error(err)
             continue
         target_conn = TargetConnection(proxy_conn.target_skt, proxy_conn.proxy_skt)
         threading.Thread(target=relay, args=(proxy_conn, target_conn)).start()
@@ -38,7 +40,7 @@ def relay(proxy_conn, target_conn):
     inputs = [proxy_conn, target_conn]
     while True:
         try:
-            rlist, wlist, elist = select.select(inputs, [], [])
+            rlist, wlist, elist = select.select(inputs, [], [], 5)
         except ValueError:
             break
         for r in rlist:
@@ -75,11 +77,14 @@ class ProxyConnection():
 
         if conn_type == raw.NEW_CONN:   # new connection
             target_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            target_skt.settimeout(2)
-            target_skt.connect((ip, port))
+            try:
+                target_skt.settimeout(3)
+                target_skt.connect((ip, port))
+            except (ConnectionRefusedError, socket.timeout):
+                raise ex.ProtocolException('connect to target server failed')
             self.target_skt = target_skt
             return target_skt
-        return None
+        raise ex.ProtocolException('proxy protocol resolution failed')
 
 
 class TargetConnection():
@@ -89,9 +94,6 @@ class TargetConnection():
 
     def fileno(self):
         return self.target_skt.fileno()
-
-    def handle_protocol(self):
-        pass
 
     def read(self):
         data = self.target_skt.recv(4096)
