@@ -90,14 +90,15 @@ def relay(local_conn, proxy_conn):
     inputs = [proxy_conn, local_conn]
     while True:
         try:
-            rlist, wlist, elist = select.select(inputs, [], [], 5)
+            rlist, wlist, elist = select.select(inputs, [], [], 3)
         except ValueError:
-            break
+            return
         for r in rlist:
             try:
                 r.read()
-            except (ConnectionResetError, BrokenPipeError):
-                break
+            except (ConnectionResetError, OSError):
+                return
+
 
 class ProxyConnection():
     def __init__(self, local_skt, proxy_skt):
@@ -109,11 +110,12 @@ class ProxyConnection():
 
     def read(self):
         data = self.proxy_skt.recv(4096)
-        if not data:
+        if data:
+            self.local_skt.sendall(data)
+        else:
             glogger.info('proxy read data: is empty')
             self.proxy_skt.close()
-
-        self.local_skt.sendall(data)
+            self.local_skt.shutdown(socket.SHUT_WR)
 
     def close(self):
         self.proxy_skt.close()
@@ -146,10 +148,12 @@ class LocalConnection():
 
     def read(self):
         data = self.local_skt.recv(4096)
-        if not data:
+        if data:
+            self.proxy_skt.sendall(data)
+        else:
             glogger.info('local read data: is empty')
             self.local_skt.close()
-        self.proxy_skt.sendall(data)
+            self.proxy_skt.shutdown(socket.SHUT_WR)
 
     def handle_protocol(self):
         ok, target_addr = socks5.serve(self.local_skt)

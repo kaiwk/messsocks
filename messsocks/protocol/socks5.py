@@ -86,7 +86,12 @@ def serve(local_skt, auth_method=NO_AUTH):
     """
 
     # connect, verify credentials
-    ver, nmethods = struct.unpack('!BB', local_skt.recv(2))
+    try:
+        plt_head = local_skt.recv(2)
+        ver, nmethods = struct.unpack('!BB', plt_head)
+    except struct.error as e:
+        logger.error(e)
+        return False, (None, None)
     all_methods = [ord(local_skt.recv(1)) for _ in range(nmethods)]
     if ver == SOCKS_VERSION:
         if auth_method in all_methods:

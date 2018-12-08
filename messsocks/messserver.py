@@ -40,14 +40,14 @@ def relay(proxy_conn, target_conn):
     inputs = [proxy_conn, target_conn]
     while True:
         try:
-            rlist, wlist, elist = select.select(inputs, [], [], 5)
+            rlist, wlist, elist = select.select(inputs, [], [], 3)
         except ValueError:
-            break
+            return
         for r in rlist:
             try:
                 r.read()
             except OSError:
-                break
+                return
 
 
 class ProxyConnection():
@@ -60,9 +60,12 @@ class ProxyConnection():
 
     def read(self):
         data = self.proxy_skt.recv(4096)
-        if not data:
+        if data:
+            self.target_skt.sendall(data)
+        else:
+            glogger.info('proxy read data is empty')
             self.proxy_skt.close()
-        self.target_skt.sendall(data)
+            self.target_skt.shutdown(socket.SHUT_WR)
 
     def close(self):
         self.proxy_skt.close()
@@ -97,7 +100,12 @@ class TargetConnection():
 
     def read(self):
         data = self.target_skt.recv(4096)
-        self.proxy_skt.sendall(data)
+        if data:
+            self.proxy_skt.sendall(data)
+        else:
+            glogger.info('target read data is empty')
+            self.target_skt.close()
+            self.proxy_skt.shutdown(socket.SHUT_WR)
 
     def close(self):
         self.target_skt.close()
