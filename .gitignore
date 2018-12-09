@@ -2,3 +2,4 @@
 __pycache__
 logs
 project.trello
+.dir-locals.el

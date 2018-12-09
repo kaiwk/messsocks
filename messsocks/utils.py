@@ -1,8 +1,10 @@
 import struct
 import socket
 
+
 def ip2int(ip):
-    """ convert string ip to int
+    """convert string ip to int
+    https://stackoverflow.com/questions/5619685/conversion-from-ip-string-to-integer-and-backward-in-python
 
     :param ip: ip
     :type ip: str
@@ -14,6 +16,7 @@ def ip2int(ip):
 
 def int2ip(ip):
     """ convert int ip to string
+    https://stackoverflow.com/questions/5619685/conversion-from-ip-string-to-integer-and-backward-in-python
 
     :param ip: ip
     :type ip: int
