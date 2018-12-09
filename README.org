@@ -1,4 +1,3 @@
-* Messsocks
-The design is messy, the code is messy, so it's called messsocks.
+* Messsocks [[https://travis-ci.org/kaiwk/messsocks][file:https://travis-ci.org/kaiwk/messsocks.svg?branch=master]]
 
 Tested with cURL and browser proxy.
