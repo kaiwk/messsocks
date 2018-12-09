@@ -1,3 +1,0 @@
-* Messsocks [[https://travis-ci.org/kaiwk/messsocks][file:https://travis-ci.org/kaiwk/messsocks.svg?branch=master]]
-
-Tested with cURL and browser proxy.
