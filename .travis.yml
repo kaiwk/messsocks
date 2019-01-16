@@ -6,5 +6,11 @@ cache: pip
 install:
     - pip install -U pip setuptools wheel
     - pip install -r requirements.txt
+addons:
+    sonarcloud:
+        organization: "kaiwk-github" # the key of the org you chose at step #3
+        token:
+            secure: "264e4d5cbe864e8b89565c72313f7cf529466af8" # encrypted value of your token
 script:
-    - pytest
+    - pytest --cov-report xml --cov=messsocks tests/
+    - sonar-scanner

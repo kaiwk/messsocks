@@ -1,3 +1,4 @@
+from pathlib import Path
 import logging.config
 
 def get_logger(name):
@@ -8,5 +9,6 @@ def get_logger(name):
     :rtype: logger
 
     """
-    logging.config.fileConfig('../logging.conf')
+    conf_path = Path(__file__).parent.parent / 'conf' / 'logging.conf'
+    logging.config.fileConfig(conf_path)
     return logging.getLogger(name)

@@ -1,5 +1,11 @@
 .idea
 __pycache__
 logs
-project.trello
+
+# editor
 .dir-locals.el
+
+# pytest & coverage
+.pytest_cache
+.coverage
+coverage.xml
