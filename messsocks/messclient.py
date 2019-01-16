@@ -9,19 +9,13 @@ import exception as ex
 from log import get_logger
 from utils import ip2int
 from protocol import socks5
-
-HOST = '127.0.0.1'
-PORT = 1081
-ADDR = (HOST, PORT)
+from config import get_config
 
 NO_AUTH = 0x00
 USERNAME_PASSWORD = 0x02
 
 USERNAME = 'username'
 PASSWORD = 'password'
-
-SERVER_IP = '127.0.0.1'
-SERVER_PORT = 34561
 
 PROXY_IP = '127.0.0.1'
 PROXY_PORT = 45678
@@ -34,7 +28,7 @@ class State(Enum):
     REQUEST = 1
     VERIFY = 2
 
-def exchange_loop():
+def exchange_loop(bind_addr):
     """A simple protocol to communicate with remote proxy
     client send:
 
@@ -64,7 +58,7 @@ def exchange_loop():
     """
     local_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     local_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    local_server.bind(ADDR)
+    local_server.bind(bind_addr)
     local_server.listen()
     while True:
         local_skt, _ = local_server.accept()
@@ -167,4 +161,7 @@ class LocalConnection():
 
 
 if __name__ == '__main__':
-    exchange_loop()
+    config = get_config()
+    host = config['client']['host']
+    port = int(config['client']['port'])
+    exchange_loop((host, port))

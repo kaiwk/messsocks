@@ -6,17 +6,15 @@ import threading
 import exception as ex
 from log import get_logger
 from protocol import raw
-
-PROXY_IP = '127.0.0.1'
-PROXY_PORT = 45678
+from config import get_config
 
 logger = get_logger('messserver')
 glogger = get_logger('messsocks')
 
-def start_server():
+def start_server(port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((PROXY_IP, PROXY_PORT))
+    server.bind(('127.0.0.1', port))
     server.listen()
     while True:
         proxy_skt, _ = server.accept()
@@ -112,4 +110,6 @@ class TargetConnection():
 
 
 if __name__ == '__main__':
-    start_server()
+    config = get_config()
+    port = int(config['server']['port'])
+    start_server(port)
