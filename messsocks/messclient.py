@@ -3,8 +3,6 @@ import select
 import struct
 import threading
 
-from enum import Enum
-
 import messsocks.exception as ex
 from messsocks.log import get_logger
 from messsocks.utils import ip2int
@@ -20,10 +18,6 @@ PASSWORD = 'password'
 logger = get_logger('messclient')
 glogger = get_logger('messsocks')
 
-class State(Enum):
-    CONNECT = 0
-    REQUEST = 1
-    VERIFY = 2
 
 def start_client(bind_addr, proxy_addr):
     """A simple protocol to communicate with remote proxy
@@ -168,5 +162,5 @@ def main():
     start_client((host, port), (proxy_host, proxy_port))
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':      # pragma: no cover
     main()

@@ -33,8 +33,6 @@ import socket
 import messsocks.exception as ex
 from messsocks.log import get_logger
 
-PROXY_IP = '127.0.0.1'
-PROXY_PORT = 45678
 
 logger = get_logger('messsocks')
 
@@ -44,27 +42,6 @@ VERSION = 1
 
 NORMAL_CONN = 0x00
 NEW_CONN = 0x01
-
-def request(addr):
-    """
-
-    :param addr: address, ip and port
-    :type addr: tuple(str, int)
-    :returns: proxy socket
-    :rtype: socket
-
-    """
-    proxy_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    proxy_skt.connect((PROXY_IP, PROXY_PORT))
-    head = struct.pack('!BB', 1, 1) # ver = 1, type = 1
-    ip = socket.inet_aton(addr[0])
-    port = struct.pack('!H', addr[1])
-    proxy_skt.sendall(head+ip+port)
-    logger.info('resolve protocol')
-    ver, success = struct.unpack('!BB', proxy_skt.recv(2))
-    if ver == 1 and success == 1:
-        return proxy_skt
-    return None
 
 
 def serve(proxy_skt):

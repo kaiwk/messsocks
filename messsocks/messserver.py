@@ -12,10 +12,10 @@ logger = get_logger('messserver')
 glogger = get_logger('messsocks')
 
 
-def start_server(port):
+def start_server(host, port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('127.0.0.1', port))
+    server.bind((host, port))
     server.listen()
     while True:
         proxy_skt, _ = server.accept()
@@ -113,9 +113,10 @@ class TargetConnection():
 
 def main():
     config = get_config()
+    host = config['server']['host']
     port = int(config['server']['port'])
-    start_server(port)
+    start_server(host, port)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':      # pragma: no cover
     main()
