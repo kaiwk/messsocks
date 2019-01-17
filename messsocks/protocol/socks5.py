@@ -13,7 +13,48 @@ AUTHENTICATION_VERSION = 1
 USERNAME = 'username'
 PASSWORD = 'password'
 
+ADDRESS_TYPE = {
+    'ipv4': 1,
+    'domain': 3,
+    'ipv6': 4
+}
+
 logger = get_logger('messsocks')
+
+
+def ensure_socks_version(expected, actual):
+    if expected != actual:
+        raise ex.ProtocolException('SOCKS version is not 5')
+
+
+def verify(local_skt, auth_method):
+    """
+    Verify client
+    """
+    try:
+        plt_head = local_skt.recv(2)
+        ver, nmethods = struct.unpack('!BB', plt_head)
+    except struct.error as e:
+        logger.error(e)
+        return False
+
+    all_methods = [ord(local_skt.recv(1)) for _ in range(nmethods)]
+
+    ensure_socks_version(SOCKS_VERSION, ver)
+
+    if auth_method not in all_methods:
+        raise ex.ProtocolException('no matched authentication method')
+
+    local_skt.sendall(struct.pack('!BB', ver, auth_method))
+    if auth_method == USERNAME_PASSWORD:
+        if verify_credentials(local_skt, USERNAME, PASSWORD):
+            # verify success
+            pass
+        else:
+            raise ex.ProtocolException('username/password verify failed')
+
+    logger.info('verify success...')
+    return True
 
 
 def serve(local_skt, auth_method=NO_AUTH):
@@ -85,27 +126,9 @@ def serve(local_skt, auth_method=NO_AUTH):
         +----+-----+-------+------+----------+----------+
     """
 
-    # connect, verify credentials
-    try:
-        plt_head = local_skt.recv(2)
-        ver, nmethods = struct.unpack('!BB', plt_head)
-    except struct.error as e:
-        logger.error(e)
+    # phase 1: verification
+    if not verify(local_skt, auth_method):
         return False, (None, None)
-    all_methods = [ord(local_skt.recv(1)) for _ in range(nmethods)]
-    if ver == SOCKS_VERSION:
-        if auth_method in all_methods:
-            local_skt.sendall(struct.pack('!BB', ver, auth_method))
-            if auth_method == USERNAME_PASSWORD:
-                if not verify_credentials(local_skt, USERNAME, PASSWORD):
-                    raise ex.ProtocolException('username/password verify failed')
-        else:
-            raise ex.ProtocolException('no matched authentication method')
-    else:
-        raise ex.ProtocolException('socks version is not 5')
-
-    logger.info('verify success...')
-    # after verification
 
     try:
         ptl_head = local_skt.recv(4)
@@ -114,28 +137,29 @@ def serve(local_skt, auth_method=NO_AUTH):
         logger.error(e)
         return False, (None, None)
 
-    assert ver == SOCKS_VERSION
+    ensure_socks_version(SOCKS_VERSION, ver)
 
-    if atyp == 1: # ipv4
-        target_ip = socket.inet_ntoa(local_skt.recv(4))
-    elif atyp == 3: # domain
+    if atyp == ADDRESS_TYPE['ipv4']:
+        target_host = socket.inet_ntoa(local_skt.recv(4))
+    elif atyp == ADDRESS_TYPE['domain']:
         domain_len = ord(local_skt.recv(1))
-        target_ip = local_skt.recv(domain_len)
+        target_host = local_skt.recv(domain_len)
     else:
         logger.error('not ipv4 and domain address type')
         return False, (None, None)
 
     target_port = struct.unpack('!H', local_skt.recv(2))[0]
 
-    logger.info('target: %s:%s', target_ip, target_port)
+    logger.info('target: %s:%s', target_host, target_port)
 
-    if cmd == 1: # connect
+    # connect
+    success = 0
+    failed = 1
+    if cmd == 1:
         try:
-            # Success, rep = 0
-            reply = struct.pack('!BBBBIH', SOCKS_VERSION, 0, 0, atyp, 0, 0)
+            reply = struct.pack('!BBBBIH', SOCKS_VERSION, success, 0, atyp, 0, 0)
         except struct.error as err:
-            # Failed, rep = 1
-            reply = struct.pack('!BBBBIH', SOCKS_VERSION, 1, 0, atyp, 0, 0)
+            reply = struct.pack('!BBBBIH', SOCKS_VERSION, failed, 0, atyp, 0, 0)
             logger.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
             local_skt.sendall(reply)
             logger.error(err)
@@ -143,9 +167,9 @@ def serve(local_skt, auth_method=NO_AUTH):
 
     local_skt.sendall(reply)
 
-    if reply[1] == 0 and cmd == 1:
+    if reply[1] == success and cmd == 1:
         logger.info('socks5 handshake finish')
-        return True, (target_ip, target_port)
+        return True, (target_host, target_port)
 
     return False, (None, None)
 
@@ -181,13 +205,14 @@ def verify_credentials(conn, username, passwd):
     plen = ord(conn.recv(1))
     _password = conn.recv(plen).decode('utf-8')
 
+    success = 0
+    failed = 1
+
     if _username == username and _password == passwd:
-        # Success, status = 0
-        response = struct.pack(">BB", version, 0)
+        response = struct.pack(">BB", version, success)
         conn.sendall(response)
         return True
 
-    # Failure, status != 0
-    response = struct.pack(">BB", version, 1)
+    response = struct.pack(">BB", version, failed)
     conn.sendall(response)
     return False

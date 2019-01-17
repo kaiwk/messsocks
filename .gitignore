@@ -1,6 +1,7 @@
 .idea
 __pycache__
 logs
+*.log
 
 # editor
 .dir-locals.el

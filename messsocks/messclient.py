@@ -5,20 +5,17 @@ import threading
 
 from enum import Enum
 
-import exception as ex
-from log import get_logger
-from utils import ip2int
-from protocol import socks5
-from config import get_config
+import messsocks.exception as ex
+from messsocks.log import get_logger
+from messsocks.utils import ip2int
+from messsocks.protocol import socks5
+from messsocks.config import get_config
 
 NO_AUTH = 0x00
 USERNAME_PASSWORD = 0x02
 
 USERNAME = 'username'
 PASSWORD = 'password'
-
-PROXY_IP = '127.0.0.1'
-PROXY_PORT = 45678
 
 logger = get_logger('messclient')
 glogger = get_logger('messsocks')
@@ -28,7 +25,7 @@ class State(Enum):
     REQUEST = 1
     VERIFY = 2
 
-def exchange_loop(bind_addr):
+def start_client(bind_addr, proxy_addr):
     """A simple protocol to communicate with remote proxy
     client send:
 
@@ -67,7 +64,7 @@ def exchange_loop(bind_addr):
         proxy_conn = ProxyConnection(local_skt, proxy_skt)
         try:
             local_conn.handle_protocol()
-            proxy_conn.handle_protocol(local_conn.target_addr)
+            proxy_conn.handle_protocol(proxy_addr, local_conn.target_addr)
         except ex.ProtocolException as err:
             logger.error(err)
             continue
@@ -75,6 +72,7 @@ def exchange_loop(bind_addr):
         threading.Thread(target=relay, args=(local_conn, proxy_conn)).start()
         logger.debug('Thread count: %s', threading.active_count())
 
+    local_server.close()
 
 def relay(local_conn, proxy_conn):
     cur_thread = threading.current_thread()
@@ -114,7 +112,7 @@ class ProxyConnection():
     def close(self):
         self.proxy_skt.close()
 
-    def handle_protocol(self, target_addr):
+    def handle_protocol(self, proxy_addr, target_addr):
         """
         :param target_addr: (ip, port)
         :returns: bool, connect success|failed
@@ -124,7 +122,7 @@ class ProxyConnection():
         ip = ip2int(ip)
         head = struct.pack('!BBIH', 1, 1, ip, port)
         try:
-            self.proxy_skt.connect((PROXY_IP, PROXY_PORT))
+            self.proxy_skt.connect(proxy_addr)
         except ConnectionRefusedError:
             raise ex.ProtocolException('proxy socket connect failed')
         self.proxy_skt.sendall(head)
@@ -160,8 +158,15 @@ class LocalConnection():
         self.local_skt.close()
 
 
-if __name__ == '__main__':
+def main():
     config = get_config()
     host = config['client']['host']
     port = int(config['client']['port'])
-    exchange_loop((host, port))
+
+    proxy_host = config['server']['host']
+    proxy_port = int(config['server']['port'])
+    start_client((host, port), (proxy_host, proxy_port))
+
+
+if __name__ == '__main__':
+    main()

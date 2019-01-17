@@ -10,6 +10,7 @@ pylint = "*"
 pytest = "*"
 coverage = "*"
 pytest-cov = "*"
+requests = {extras = ["socks"], version = "*"}
 
 [requires]
 python_version = "3.7"

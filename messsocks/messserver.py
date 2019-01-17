@@ -3,13 +3,14 @@ import struct
 import select
 import threading
 
-import exception as ex
-from log import get_logger
-from protocol import raw
-from config import get_config
+import messsocks.exception as ex
+from messsocks.log import get_logger
+from messsocks.protocol import raw
+from messsocks.config import get_config
 
 logger = get_logger('messserver')
 glogger = get_logger('messsocks')
+
 
 def start_server(port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -29,6 +30,7 @@ def start_server(port):
         threading.Thread(target=relay, args=(proxy_conn, target_conn)).start()
         logger.debug('Thread count: %s', threading.active_count())
 
+    server.close()
 
 def relay(proxy_conn, target_conn):
     cur_thread = threading.current_thread()
@@ -76,7 +78,7 @@ class ProxyConnection():
         ip = socket.inet_ntoa(struct.pack('!I', ip))
         glogger.debug('ver: %s, type: %s, addr: %s:%s', ver, conn_type, ip, port)
 
-        if conn_type == raw.NEW_CONN:   # new connection
+        if conn_type == raw.NEW_CONN:
             target_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 target_skt.settimeout(3)
@@ -109,7 +111,11 @@ class TargetConnection():
         self.target_skt.close()
 
 
-if __name__ == '__main__':
+def main():
     config = get_config()
     port = int(config['server']['port'])
     start_server(port)
+
+
+if __name__ == '__main__':
+    main()
