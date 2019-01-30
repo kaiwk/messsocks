@@ -10,21 +10,17 @@ USERNAME_PASSWORD = 0x02
 SOCKS_VERSION = 5
 AUTHENTICATION_VERSION = 1
 
-USERNAME = 'username'
-PASSWORD = 'password'
+USERNAME = "username"
+PASSWORD = "password"
 
-ADDRESS_TYPE = {
-    'ipv4': 1,
-    'domain': 3,
-    'ipv6': 4
-}
+ADDRESS_TYPE = {"ipv4": 1, "domain": 3, "ipv6": 4}
 
-logger = get_logger('messsocks')
+logger = get_logger("messsocks")
 
 
 def ensure_socks_version(expected, actual):
     if expected != actual:
-        raise ex.ProtocolException('SOCKS version is not 5')
+        raise ex.ProtocolException("SOCKS version is not 5")
 
 
 def verify(local_skt, auth_method):
@@ -33,7 +29,7 @@ def verify(local_skt, auth_method):
     """
     try:
         plt_head = local_skt.recv(2)
-        ver, nmethods = struct.unpack('!BB', plt_head)
+        ver, nmethods = struct.unpack("!BB", plt_head)
     except struct.error as e:
         logger.error(e)
         return False
@@ -43,17 +39,17 @@ def verify(local_skt, auth_method):
     ensure_socks_version(SOCKS_VERSION, ver)
 
     if auth_method not in all_methods:
-        raise ex.ProtocolException('no matched authentication method')
+        raise ex.ProtocolException("no matched authentication method")
 
-    local_skt.sendall(struct.pack('!BB', ver, auth_method))
+    local_skt.sendall(struct.pack("!BB", ver, auth_method))
     if auth_method == USERNAME_PASSWORD:
         if verify_credentials(local_skt, USERNAME, PASSWORD):
             # verify success
             pass
         else:
-            raise ex.ProtocolException('username/password verify failed')
+            raise ex.ProtocolException("username/password verify failed")
 
-    logger.info('verify success...')
+    logger.info("verify success...")
     return True
 
 
@@ -132,35 +128,35 @@ def serve(local_skt, auth_method=NO_AUTH):
 
     try:
         ptl_head = local_skt.recv(4)
-        ver, cmd, _, atyp = struct.unpack('!BBBB', ptl_head)
+        ver, cmd, _, atyp = struct.unpack("!BBBB", ptl_head)
     except (ConnectionResetError, struct.error) as e:
         logger.error(e)
         return False, (None, None)
 
     ensure_socks_version(SOCKS_VERSION, ver)
 
-    if atyp == ADDRESS_TYPE['ipv4']:
+    if atyp == ADDRESS_TYPE["ipv4"]:
         target_host = socket.inet_ntoa(local_skt.recv(4))
-    elif atyp == ADDRESS_TYPE['domain']:
+    elif atyp == ADDRESS_TYPE["domain"]:
         domain_len = ord(local_skt.recv(1))
         target_host = local_skt.recv(domain_len)
     else:
-        logger.error('not ipv4 and domain address type')
+        logger.error("not ipv4 and domain address type")
         return False, (None, None)
 
-    target_port = struct.unpack('!H', local_skt.recv(2))[0]
+    target_port = struct.unpack("!H", local_skt.recv(2))[0]
 
-    logger.info('target: %s:%s', target_host, target_port)
+    logger.info("target: %s:%s", target_host, target_port)
 
     # connect
     success = 0
     failed = 1
     if cmd == 1:
         try:
-            reply = struct.pack('!BBBBIH', SOCKS_VERSION, success, 0, atyp, 0, 0)
+            reply = struct.pack("!BBBBIH", SOCKS_VERSION, success, 0, atyp, 0, 0)
         except struct.error as err:
-            reply = struct.pack('!BBBBIH', SOCKS_VERSION, failed, 0, atyp, 0, 0)
-            logger.error('socks version: %s, bind address: %s:%s', SOCKS_VERSION, 0, 0)
+            reply = struct.pack("!BBBBIH", SOCKS_VERSION, failed, 0, atyp, 0, 0)
+            logger.error("socks version: %s, bind address: %s:%s", SOCKS_VERSION, 0, 0)
             local_skt.sendall(reply)
             logger.error(err)
             return False, (None, None)
@@ -168,7 +164,7 @@ def serve(local_skt, auth_method=NO_AUTH):
     local_skt.sendall(reply)
 
     if reply[1] == success and cmd == 1:
-        logger.info('socks5 handshake finish')
+        logger.info("socks5 handshake finish")
         return True, (target_host, target_port)
 
     return False, (None, None)
@@ -196,14 +192,14 @@ def verify_credentials(conn, username, passwd):
     """
 
     version = ord(conn.recv(1))
-    logger.info('authentication version: %s', version)
+    logger.info("authentication version: %s", version)
     assert version == AUTHENTICATION_VERSION
 
     ulen = ord(conn.recv(1))
-    _username = conn.recv(ulen).decode('utf-8')
+    _username = conn.recv(ulen).decode("utf-8")
 
     plen = ord(conn.recv(1))
-    _password = conn.recv(plen).decode('utf-8')
+    _password = conn.recv(plen).decode("utf-8")
 
     success = 0
     failed = 1

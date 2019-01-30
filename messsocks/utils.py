@@ -12,7 +12,8 @@ def ip2int(ip):
     :rtype: int
 
     """
-    return struct.unpack('!I', socket.inet_aton(ip))[0]
+    return struct.unpack("!I", socket.inet_aton(ip))[0]
+
 
 def int2ip(ip):
     """ convert int ip to string
@@ -24,4 +25,4 @@ def int2ip(ip):
     :rtype: str
 
     """
-    return socket.inet_ntoa(struct.pack('!I', ip))
+    return socket.inet_ntoa(struct.pack("!I", ip))

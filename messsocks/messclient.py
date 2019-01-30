@@ -12,11 +12,11 @@ from messsocks.config import get_config
 NO_AUTH = 0x00
 USERNAME_PASSWORD = 0x02
 
-USERNAME = 'username'
-PASSWORD = 'password'
+USERNAME = "username"
+PASSWORD = "password"
 
-logger = get_logger('messclient')
-glogger = get_logger('messsocks')
+logger = get_logger("messclient")
+glogger = get_logger("messsocks")
 
 
 def start_client(bind_addr, proxy_addr):
@@ -62,15 +62,16 @@ def start_client(bind_addr, proxy_addr):
         except ex.ProtocolException as err:
             logger.error(err)
             continue
-        glogger.info('start connecting proxy server')
+        glogger.info("start connecting proxy server")
         threading.Thread(target=relay, args=(local_conn, proxy_conn)).start()
-        logger.debug('Thread count: %s', threading.active_count())
+        logger.debug("Thread count: %s", threading.active_count())
 
     local_server.close()
 
+
 def relay(local_conn, proxy_conn):
     cur_thread = threading.current_thread()
-    logger.debug('Thread %s: %s', cur_thread.name, cur_thread.ident)
+    logger.debug("Thread %s: %s", cur_thread.name, cur_thread.ident)
     proxy_conn.proxy_skt.setblocking(False)
     local_conn.local_skt.setblocking(False)
     inputs = [proxy_conn, local_conn]
@@ -86,7 +87,7 @@ def relay(local_conn, proxy_conn):
                 return
 
 
-class ProxyConnection():
+class ProxyConnection:
     def __init__(self, local_skt, proxy_skt):
         self.proxy_skt = proxy_skt
         self.local_skt = local_skt
@@ -99,7 +100,7 @@ class ProxyConnection():
         if data:
             self.local_skt.sendall(data)
         else:
-            glogger.info('proxy read data: is empty')
+            glogger.info("proxy read data: is empty")
             self.proxy_skt.close()
             self.local_skt.shutdown(socket.SHUT_WR)
 
@@ -114,16 +115,16 @@ class ProxyConnection():
         """
         ip, port = target_addr
         ip = ip2int(ip)
-        head = struct.pack('!BBIH', 1, 1, ip, port)
+        head = struct.pack("!BBIH", 1, 1, ip, port)
         try:
             self.proxy_skt.connect(proxy_addr)
         except ConnectionRefusedError:
-            raise ex.ProtocolException('proxy socket connect failed')
+            raise ex.ProtocolException("proxy socket connect failed")
         self.proxy_skt.sendall(head)
         return True
 
 
-class LocalConnection():
+class LocalConnection:
     def __init__(self, local_skt, proxy_skt):
         self.local_skt = local_skt
         self.proxy_skt = proxy_skt
@@ -137,7 +138,7 @@ class LocalConnection():
         if data:
             self.proxy_skt.sendall(data)
         else:
-            glogger.info('local read data: is empty')
+            glogger.info("local read data: is empty")
             self.local_skt.close()
             self.proxy_skt.shutdown(socket.SHUT_WR)
 
@@ -146,7 +147,7 @@ class LocalConnection():
         if ok:
             self.target_addr = target_addr
         else:
-            raise ex.ProtocolException('socks5 resolution falied')
+            raise ex.ProtocolException("socks5 resolution falied")
 
     def close(self):
         self.local_skt.close()
@@ -154,13 +155,13 @@ class LocalConnection():
 
 def main():
     config = get_config()
-    host = config['client']['host']
-    port = int(config['client']['port'])
+    host = config["client"]["host"]
+    port = int(config["client"]["port"])
 
-    proxy_host = config['server']['host']
-    proxy_port = int(config['server']['port'])
+    proxy_host = config["server"]["host"]
+    proxy_port = int(config["server"]["port"])
     start_client((host, port), (proxy_host, proxy_port))
 
 
-if __name__ == '__main__':      # pragma: no cover
+if __name__ == "__main__":  # pragma: no cover
     main()

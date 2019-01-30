@@ -2,9 +2,11 @@
 __pycache__
 logs
 *.log
+*.pyc
 
 # editor
 .dir-locals.el
+.vscode/
 
 # pytest & coverage
 .pytest_cache
