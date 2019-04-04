@@ -153,10 +153,13 @@ def serve(local_skt, auth_method=NO_AUTH):
     failed = 1
     if cmd == 1:
         try:
-            reply = struct.pack("!BBBBIH", SOCKS_VERSION, success, 0, atyp, 0, 0)
+            reply = struct.pack("!BBBBIH", SOCKS_VERSION,
+                                success, 0, atyp, 0, 0)
         except struct.error as err:
-            reply = struct.pack("!BBBBIH", SOCKS_VERSION, failed, 0, atyp, 0, 0)
-            logger.error("socks version: %s, bind address: %s:%s", SOCKS_VERSION, 0, 0)
+            reply = struct.pack("!BBBBIH", SOCKS_VERSION,
+                                failed, 0, atyp, 0, 0)
+            logger.error("socks version: %s, bind address: %s:%s",
+                         SOCKS_VERSION, 0, 0)
             local_skt.sendall(reply)
             logger.error(err)
             return False, (None, None)

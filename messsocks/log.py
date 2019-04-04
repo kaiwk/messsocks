@@ -3,7 +3,7 @@ import logging.config
 
 
 def get_logger(name):
-    """
+    """ logs conf will read from <project-root>/conf/logging.conf
 
     :param name: name
     :returns: logger
