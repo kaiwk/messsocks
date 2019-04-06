@@ -3,6 +3,9 @@ __pycache__
 logs
 *.log
 *.pyc
+GPATH
+GRTAGS
+GTAGS
 
 # editor
 .dir-locals.el
