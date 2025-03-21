@@ -116,6 +116,7 @@ def main():
     config = get_config()
     host = config["server"]["host"]
     port = int(config["server"]["port"])
+    glogger.info("start server...")
     start_server(host, port)
 
 

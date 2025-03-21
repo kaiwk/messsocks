@@ -114,7 +114,7 @@ class ProxyConnection:
         :rtype:
         """
         ip, port = target_addr
-        ip = ip2int(ip)
+        ip = ip2int(ip.decode())
         head = struct.pack("!BBIH", 1, 1, ip, port)
         try:
             self.proxy_skt.connect(proxy_addr)
@@ -160,6 +160,7 @@ def main():
 
     proxy_host = config["server"]["host"]
     proxy_port = int(config["server"]["port"])
+    glogger.info("start client...")
     start_client((host, port), (proxy_host, proxy_port))
 
 
