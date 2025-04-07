@@ -1,0 +1,24 @@
+# Text files on commit to LF endings by default
+* text eol=lf
+
+# Make sure windows batch files preserve CRLF ending
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.STL binary
+*.stl binary
+*.jpeg binary
+*.jpg binary
+*.png binary
+*.rsl binary
+*.ico binary
+*.ttc binary
+*.zip binary
+*.xlsx binary
+*.so.1.1 binary
+*.lib binary
+*.dll binary
+*.so binary
+
+*.ttf binary
+*.otf binary
